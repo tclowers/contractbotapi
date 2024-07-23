@@ -22,7 +22,7 @@ namespace GPTWrapper.Controllers
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] GPTRequest request)
         {
-            var apiKey = _configuration["OpenAI:ApiKey"];
+            var apiKey = _configuration["OpenAIApiKey"];
             if (string.IsNullOrEmpty(apiKey))
             {
                 return BadRequest("OpenAI API key not found in configuration.");

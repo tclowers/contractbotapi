@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>e3100373-4240-4d7d-8b08-20d331c48d73</UserSecretsId>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>

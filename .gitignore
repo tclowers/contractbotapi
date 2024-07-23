@@ -53,3 +53,7 @@ Thumbs.db
 # NUNIT
 *.VisualState.xml
 TestResult.xml
+
+# Publish
+publish.zip
+deploy.txt
