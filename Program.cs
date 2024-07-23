@@ -1,4 +1,4 @@
-using OpenAI_API;
+using System.Net.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,17 +8,8 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Update this line to use the user secret
-builder.Services.AddSingleton<OpenAIAPI>(sp =>
-{
-    var configuration = sp.GetRequiredService<IConfiguration>();
-    var apiKey = configuration["OpenAI:ApiKey"];
-    if (string.IsNullOrEmpty(apiKey))
-    {
-        throw new InvalidOperationException("OpenAI API key not found in configuration.");
-    }
-    return new OpenAIAPI(apiKey);
-});
+// Add HttpClient
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 
