@@ -1,4 +1,6 @@
 using System.Net.Http;
+using ContractBotApi.Data;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,6 +27,16 @@ builder.Services.AddCors(options =>
                    .AllowAnyHeader();
         });
 });
+
+// Add database context
+var connectionString = builder.Configuration["CONTRACTBOT_DB_CONNECTION_STRING"];
+
+if (string.IsNullOrEmpty(connectionString))
+{
+    throw new InvalidOperationException("Database connection string not found. Please set the CONTRACTBOT_DB_CONNECTION_STRING environment variable.");
+}
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseNpgsql(connectionString));
 
 var app = builder.Build();
 

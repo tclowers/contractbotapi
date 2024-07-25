@@ -3,8 +3,10 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using ContractBotApi.Data;
+using ContractBotApi.Models;
 
-namespace GPTWrapper.Controllers
+namespace ContractBotApi.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
@@ -12,11 +14,13 @@ namespace GPTWrapper.Controllers
     {
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _configuration;
+        private readonly ApplicationDbContext _context;
 
-        public GPTController(HttpClient httpClient, IConfiguration configuration)
+        public GPTController(HttpClient httpClient, IConfiguration configuration, ApplicationDbContext context)
         {
             _httpClient = httpClient;
             _configuration = configuration;
+            _context = context;
         }
 
         [HttpPost]
@@ -45,7 +49,20 @@ namespace GPTWrapper.Controllers
             if (response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
-                return Ok(JsonSerializer.Deserialize<JsonElement>(responseContent));
+                var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+
+                // Save conversation history
+                var conversationHistory = new ConversationHistory
+                {
+                    UserId = "anonymous", // You may want to implement user authentication
+                    Message = request.Prompt,
+                    Response = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString(),
+                    Timestamp = DateTime.UtcNow
+                };
+                _context.ConversationHistories.Add(conversationHistory);
+                await _context.SaveChangesAsync();
+
+                return Ok(jsonResponse);
             }
             else
             {

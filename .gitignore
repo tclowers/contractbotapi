@@ -57,3 +57,6 @@ TestResult.xml
 # Publish
 publish.zip
 deploy.txt
+
+# Ignore launchSettings.json to avoid committing local secrets
+**/Properties/launchSettings.json
