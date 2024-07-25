@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using ContractBotApi.Data;
 using ContractBotApi.Models;
+using iTextSharp.text.pdf;
+using iTextSharp.text.pdf.parser;
 
 namespace ContractBotApi.Controllers
 {
@@ -68,6 +70,37 @@ namespace ContractBotApi.Controllers
             {
                 return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
             }
+        }
+
+        [HttpPost("upload-pdf")]
+        public async Task<IActionResult> UploadPdf(IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest("No file uploaded.");
+
+            if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                return BadRequest("Only PDF files are allowed.");
+
+            using var memoryStream = new MemoryStream();
+            await file.CopyToAsync(memoryStream);
+            memoryStream.Position = 0;
+
+            var text = ExtractTextFromPdf(memoryStream);
+
+            return Ok(new { text });
+        }
+
+        private string ExtractTextFromPdf(Stream pdfStream)
+        {
+            using var reader = new PdfReader(pdfStream);
+            var text = new StringBuilder();
+
+            for (int i = 1; i <= reader.NumberOfPages; i++)
+            {
+                text.Append(PdfTextExtractor.GetTextFromPage(reader, i));
+            }
+
+            return text.ToString();
         }
     }
 
