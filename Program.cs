@@ -1,6 +1,9 @@
 using System.Net.Http;
 using ContractBotApi.Data;
 using Microsoft.EntityFrameworkCore;
+using ContractBotApi.Controllers;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +41,9 @@ if (string.IsNullOrEmpty(connectionString))
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// Register GPTController as a scoped service
+builder.Services.AddScoped<GPTController>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -51,27 +57,30 @@ app.UseHttpsRedirection();
 
 app.UseCors("AllowAll");
 
+app.UseWebSockets();
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path == "/ws")
+    {
+        if (context.WebSockets.IsWebSocketRequest)
+        {
+            var scope = app.Services.CreateScope();
+            var gptController = scope.ServiceProvider.GetRequiredService<GPTController>();
+            await gptController.HandleWebSocket(context); // Pass the HttpContext here
+        }
+        else
+        {
+            context.Response.StatusCode = 400;
+        }
+    }
+    else
+    {
+        await next();
+    }
+});
+
 app.MapControllers();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
 
 app.Run();
 
