@@ -5,10 +5,10 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using ContractBotApi.Data;
 using ContractBotApi.Models;
-using iTextSharp.text.pdf;
-using iTextSharp.text.pdf.parser;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
+using UglyToad.PdfPig;
+using UglyToad.PdfPig.Content;
 
 namespace ContractBotApi.Controllers
 {
@@ -149,15 +149,67 @@ namespace ContractBotApi.Controllers
 
         private string ExtractTextFromPdf(Stream pdfStream)
         {
-            using var reader = new PdfReader(pdfStream);
-            var text = new StringBuilder();
+            var sb = new StringBuilder();
 
-            for (int i = 1; i <= reader.NumberOfPages; i++)
+            using (var document = UglyToad.PdfPig.PdfDocument.Open(pdfStream))
             {
-                text.Append(PdfTextExtractor.GetTextFromPage(reader, i));
+                for (var i = 1; i <= document.NumberOfPages; i++)
+                {
+                    var page = document.GetPage(i);
+                    var words = page.GetWords().ToList();
+                    
+                    if (!words.Any())
+                    {
+                        sb.AppendLine(); // Empty page
+                        continue;
+                    }
+
+                    float lastBottom = (float)words[0].BoundingBox.Bottom;
+                    float lineHeight = words.Max(w => (float)w.BoundingBox.Height);
+                    float pageLeft = words.Min(w => (float)w.BoundingBox.Left);
+                    StringBuilder lineSb = new StringBuilder();
+
+                    foreach (var word in words)
+                    {
+                        float wordBottom = (float)word.BoundingBox.Bottom;
+                        float wordLeft = (float)word.BoundingBox.Left;
+
+                        if (lastBottom - wordBottom > lineHeight / 2)
+                        {
+                            // New line detected
+                            sb.AppendLine(lineSb.ToString().TrimEnd());
+                            lineSb.Clear();
+                            
+                            // Add empty lines if the gap is large enough
+                            int emptyLines = (int)((lastBottom - wordBottom) / lineHeight) - 1;
+                            for (int k = 0; k < emptyLines; k++)
+                            {
+                                sb.AppendLine();
+                            }
+
+                            // Add indentation
+                            if (wordLeft - pageLeft > 10) // Adjust this value as needed
+                            {
+                                lineSb.Append("    "); // Add 4 spaces for indentation
+                            }
+                        }
+                        else if (lineSb.Length > 0)
+                        {
+                            // Add space between words on the same line
+                            lineSb.Append(' ');
+                        }
+
+                        lineSb.Append(word.Text);
+                        lastBottom = wordBottom;
+                    }
+
+                    // Add the last line
+                    sb.AppendLine(lineSb.ToString().TrimEnd());
+                    sb.AppendLine(); // Add an extra line break between pages
+                }
             }
 
-            return text.ToString();
+            return sb.ToString().TrimEnd();
         }
     }
 
