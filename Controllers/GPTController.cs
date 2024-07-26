@@ -9,6 +9,8 @@ using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
+using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ContractBotApi.Controllers
 {
@@ -169,6 +171,8 @@ namespace ContractBotApi.Controllers
                     float pageLeft = words.Min(w => (float)w.BoundingBox.Left);
                     StringBuilder lineSb = new StringBuilder();
 
+                    bool isFirstLine = true;
+
                     foreach (var word in words)
                     {
                         float wordBottom = (float)word.BoundingBox.Bottom;
@@ -177,7 +181,15 @@ namespace ContractBotApi.Controllers
                         if (lastBottom - wordBottom > lineHeight / 2)
                         {
                             // New line detected
-                            sb.AppendLine(lineSb.ToString().TrimEnd());
+                            if (isFirstLine)
+                            {
+                                sb.AppendLine(InsertSpacesIntoLongWords(lineSb.ToString().TrimEnd()));
+                                isFirstLine = false;
+                            }
+                            else
+                            {
+                                sb.AppendLine(lineSb.ToString().TrimEnd());
+                            }
                             lineSb.Clear();
                             
                             // Add empty lines if the gap is large enough
@@ -205,11 +217,36 @@ namespace ContractBotApi.Controllers
 
                     // Add the last line
                     sb.AppendLine(lineSb.ToString().TrimEnd());
-                    sb.AppendLine(); // Add an extra line break between pages
                 }
             }
 
             return sb.ToString().TrimEnd();
+        }
+
+        private string InsertSpacesIntoLongWords(string input)
+        {
+            var words = input.Split(' ');
+            var result = new StringBuilder();
+
+            foreach (var word in words)
+            {
+                if (word.Length > 10) // Adjust this threshold as needed
+                {
+                    result.Append(string.Join(" ", SplitCamelCase(word)));
+                }
+                else
+                {
+                    result.Append(word);
+                }
+                result.Append(' ');
+            }
+
+            return result.ToString().TrimEnd();
+        }
+
+        private IEnumerable<string> SplitCamelCase(string input)
+        {
+            return System.Text.RegularExpressions.Regex.Split(input, @"(?<!^)(?=[A-Z])");
         }
     }
 
