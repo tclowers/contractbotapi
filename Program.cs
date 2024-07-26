@@ -1,6 +1,10 @@
 using System.Net.Http;
 using ContractBotApi.Data;
 using Microsoft.EntityFrameworkCore;
+using Azure.Storage.Blobs;
+
+// Register the Code Pages Encoding Provider
+System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +42,15 @@ if (string.IsNullOrEmpty(connectionString))
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// Add Azure Blob Storage
+var azureStorageConnectionString = builder.Configuration["AZURE_BLOB_STORAGE_CONNECTION_STRING"];
+if (string.IsNullOrEmpty(azureStorageConnectionString))
+{
+    throw new InvalidOperationException("Azure Blob Storage connection string not found. Please set the AZURE_BLOB_STORAGE_CONNECTION_STRING environment variable.");
+}
+Console.WriteLine($"Azure Storage connection string: {azureStorageConnectionString?.Substring(0, Math.Min(azureStorageConnectionString.Length, 20))}...");
+builder.Services.AddSingleton(x => new BlobServiceClient(azureStorageConnectionString));
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -74,7 +87,6 @@ app.MapGet("/weatherforecast", () =>
 .WithOpenApi();
 
 app.Run();
-
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);

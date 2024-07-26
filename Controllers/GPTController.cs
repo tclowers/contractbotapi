@@ -7,6 +7,8 @@ using ContractBotApi.Data;
 using ContractBotApi.Models;
 using iTextSharp.text.pdf;
 using iTextSharp.text.pdf.parser;
+using Azure.Storage.Blobs;
+using Microsoft.Extensions.Logging;
 
 namespace ContractBotApi.Controllers
 {
@@ -17,12 +19,16 @@ namespace ContractBotApi.Controllers
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _configuration;
         private readonly ApplicationDbContext _context;
+        private readonly BlobServiceClient _blobServiceClient;
+        private readonly ILogger<GPTController> _logger;
 
-        public GPTController(HttpClient httpClient, IConfiguration configuration, ApplicationDbContext context)
+        public GPTController(HttpClient httpClient, IConfiguration configuration, ApplicationDbContext context, BlobServiceClient blobServiceClient, ILogger<GPTController> logger)
         {
             _httpClient = httpClient;
             _configuration = configuration;
             _context = context;
+            _blobServiceClient = blobServiceClient;
+            _logger = logger;
         }
 
         [HttpPost]
@@ -75,19 +81,70 @@ namespace ContractBotApi.Controllers
         [HttpPost("upload-pdf")]
         public async Task<IActionResult> UploadPdf(IFormFile file)
         {
+            _logger.LogInformation("UploadPdf method called");
+
             if (file == null || file.Length == 0)
+            {
+                _logger.LogWarning("No file uploaded");
                 return BadRequest("No file uploaded.");
+            }
 
             if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Non-PDF file uploaded: {FileName}", file.FileName);
                 return BadRequest("Only PDF files are allowed.");
+            }
 
-            using var memoryStream = new MemoryStream();
-            await file.CopyToAsync(memoryStream);
-            memoryStream.Position = 0;
+            try
+            {
+                // Upload to Azure Blob Storage
+                _logger.LogInformation("Getting blob container client");
+                var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
+                await containerClient.CreateIfNotExistsAsync();
 
-            var text = ExtractTextFromPdf(memoryStream);
+                var blobName = $"{Guid.NewGuid()}.pdf";
+                var blobClient = containerClient.GetBlobClient(blobName);
 
-            return Ok(new { text });
+                _logger.LogInformation("Uploading to blob storage");
+                await using (var stream = file.OpenReadStream())
+                {
+                    await blobClient.UploadAsync(stream, true);
+                }
+                _logger.LogInformation("Upload to blob storage complete");
+
+                // Extract text from PDF
+                _logger.LogInformation("Extracting text from PDF");
+                string text;
+                using (var stream = file.OpenReadStream())
+                {
+                    text = ExtractTextFromPdf(stream);
+                }
+                _logger.LogInformation("Text extracted, length: {Length}", text.Length);
+
+                var uploadedFile = new UploadedFile
+                {
+                    OriginalFileName = file.FileName,
+                    BlobStorageLocation = blobClient.Uri.ToString(),
+                    UploadTimestamp = DateTime.UtcNow
+                };
+
+                _logger.LogInformation("Saving file information to database");
+                _context.UploadedFiles.Add(uploadedFile);
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("File information saved to database");
+
+                return Ok(new { 
+                    text, 
+                    fileId = uploadedFile.Id,
+                    originalFileName = uploadedFile.OriginalFileName,
+                    blobStorageLocation = uploadedFile.BlobStorageLocation
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing file: {Message}", ex.Message);
+                return StatusCode(500, $"Error processing file: {ex.Message}");
+            }
         }
 
         private string ExtractTextFromPdf(Stream pdfStream)
