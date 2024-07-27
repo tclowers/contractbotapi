@@ -11,6 +11,9 @@ using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 using System.Linq;
 using System.Text.RegularExpressions;
+using iTextSharp.text;
+using iTextSharp.text.pdf;
+using System.IO;
 
 namespace ContractBotApi.Controllers
 {
@@ -149,6 +152,48 @@ namespace ContractBotApi.Controllers
             }
         }
 
+        [HttpPost("generate-pdf")]
+        public async Task<IActionResult> GeneratePdf([FromBody] PdfGenerationRequest request)
+        {
+            if (string.IsNullOrEmpty(request.FileName) || string.IsNullOrEmpty(request.TextContent))
+            {
+                return BadRequest("FileName and TextContent are required.");
+            }
+
+            try
+            {
+                // Generate PDF
+                byte[] pdfBytes;
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    Document document = new Document();
+                    PdfWriter writer = PdfWriter.GetInstance(document, ms);
+                    document.Open();
+                    document.Add(new Paragraph(request.TextContent));
+                    document.Close();
+                    pdfBytes = ms.ToArray();
+                }
+
+                // Upload to Azure Blob Storage
+                var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
+                await containerClient.CreateIfNotExistsAsync();
+
+                var blobClient = containerClient.GetBlobClient(request.FileName);
+
+                using (MemoryStream stream = new MemoryStream(pdfBytes))
+                {
+                    await blobClient.UploadAsync(stream, true);
+                }
+
+                return Ok(new { message = "PDF generated and uploaded successfully", blobUrl = blobClient.Uri.ToString() });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating or uploading PDF: {Message}", ex.Message);
+                return StatusCode(500, $"Error generating or uploading PDF: {ex.Message}");
+            }
+        }
+
         private string ExtractTextFromPdf(Stream pdfStream)
         {
             var sb = new StringBuilder();
@@ -253,5 +298,11 @@ namespace ContractBotApi.Controllers
     public class GPTRequest
     {
         public string? Prompt { get; set; }
+    }
+
+    public class PdfGenerationRequest
+    {
+        public string FileName { get; set; }
+        public string TextContent { get; set; }
     }
 }
