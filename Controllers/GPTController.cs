@@ -104,7 +104,7 @@ namespace ContractBotApi.Controllers
                 var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
                 await containerClient.CreateIfNotExistsAsync();
 
-                var blobName = $"{Guid.NewGuid()}.pdf";
+                var blobName = file.FileName;
                 var blobClient = containerClient.GetBlobClient(blobName);
 
                 _logger.LogInformation("Uploading to blob storage");
