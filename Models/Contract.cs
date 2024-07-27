@@ -20,7 +20,7 @@ namespace ContractBotApi.Models
         public string? DeliveryTerms { get; set; }
         public string? Appendix { get; set; }
 
-        public async Task ExtractContractDataAsync(HttpClient httpClient, string apiKey, string contractText, ILogger logger)
+        public async Task<bool> ExtractContractDataAsync(HttpClient httpClient, string apiKey, string contractText, ILogger logger)
         {
             var requestBody = new
             {
@@ -35,7 +35,7 @@ namespace ContractBotApi.Models
                             new
                             {
                                 type = "text",
-                                text = "You are a state of the art contract parsing engine. The user will submit a contract in plain text format, and you will classify the contract into one of four possible types, and extract certain important data points and respond with this information in JSON format.\n\nThe four possible contract types are: \nSpot Contract,\nForward Contract,\nOption Contract,\nSwap Contract\n\nBesides making this classification, you will extract these data points from the contract text:\nProduct (e.g. hydrogen, SAF, ammonia),\nPrice,\nVolume,\nDeliveryTerms,\nAppendix containing legal terms.\n\nThe JSON response should be in this format:\n\"\"\"\n{\n  \"contract_type\": \"Forward Contract\",\n  \"product\": \"Industrial grade Hydrogen\",\n  \"price\": \"$3 per kilogram\",\n  \"volume\": \"10,000 kilograms per month\",\n  \"delivery_terms\": \"Delivered at Place (DAP) as defined in Incoterms 2020\",\n  \"appendix\": \"Hydrogen Purity: 99.97%, Moisture Content: less than 5 ppm, Delivery Pressure: 500 psi\"\n}\n\"\"\""
+                                text = "You are a state of the art contract parsing engine. The user will submit a document in plain text format that may be a contract, classify it as a contract or non-contract, and if it is a contract you will classify the contract into one of four possible types, and extract certain important data points and respond with this information in JSON format.\n\nThe four possible contract types are: \nSpot Contract,\nForward Contract,\nOption Contract,\nSwap Contract\n\nBesides making this classification, you will extract these data points from the contract text:\nProduct (e.g. hydrogen, SAF, ammonia),\nPrice,\nVolume,\nDeliveryTerms,\nAppendix containing legal terms.\n\nThe JSON response should be in this format:\n\"\"\"\n{\n  \"is_contract\": \"true\",\n  \"contract_type\": \"Forward Contract\",\n  \"product\": \"Industrial grade Hydrogen\",\n  \"price\": \"$3 per kilogram\",\n  \"volume\": \"10,000 kilograms per month\",\n  \"delivery_terms\": \"Delivered at Place (DAP) as defined in Incoterms 2020\",\n  \"appendix\": \"Hydrogen Purity: 99.97%, Moisture Content: less than 5 ppm, Delivery Pressure: 500 psi\"\n}\n\"\"\""
                             }
                         }
                     },
@@ -69,8 +69,8 @@ namespace ContractBotApi.Models
                 var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
                 var extractedDataString = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
                 
-                // Remove any leading or trailing backticks, whitespace, and the "json" prefix
-                extractedDataString = extractedDataString.Trim('`', ' ', '\n', '\r');
+                // Remove any leading or trailing backticks, whitespace, triple quotes, and the "json" prefix
+                extractedDataString = extractedDataString.Trim('`', ' ', '\n', '\r', '"');
                 if (extractedDataString.StartsWith("json", StringComparison.OrdinalIgnoreCase))
                 {
                     extractedDataString = extractedDataString.Substring(4).TrimStart();
@@ -82,12 +82,23 @@ namespace ContractBotApi.Models
                 {
                     var extractedData = JsonSerializer.Deserialize<JsonElement>(extractedDataString);
 
+                    if (extractedData.TryGetProperty("is_contract", out var isContractElement))
+                    {
+                        bool isContract = isContractElement.GetString().Equals("true", StringComparison.OrdinalIgnoreCase);
+                        if (!isContract)
+                        {
+                            return false;
+                        }
+                    }
+
                     ContractType = extractedData.TryGetProperty("contract_type", out var contractType) ? contractType.GetString() : null;
                     Product = extractedData.TryGetProperty("product", out var product) ? product.GetString() : null;
                     Price = extractedData.TryGetProperty("price", out var price) ? price.GetString() : null;
                     Volume = extractedData.TryGetProperty("volume", out var volume) ? volume.GetString() : null;
                     DeliveryTerms = extractedData.TryGetProperty("delivery_terms", out var deliveryTerms) ? deliveryTerms.GetString() : null;
                     Appendix = extractedData.TryGetProperty("appendix", out var appendix) ? appendix.GetString() : null;
+
+                    return true;
                 }
                 catch (JsonException ex)
                 {

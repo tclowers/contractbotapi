@@ -143,34 +143,38 @@ namespace ContractBotApi.Controllers
                 }
                 try
                 {
-                    await contract.ExtractContractDataAsync(_httpClient, apiKey, text, _logger);
+                    bool isContract = await contract.ExtractContractDataAsync(_httpClient, apiKey, text, _logger);
+                    if (!isContract)
+                    {
+                        return Ok(new { 
+                            isContract = false,
+                            message = "The uploaded document is not a contract."
+                        });
+                    }
+
                     _logger.LogInformation("Contract data extracted successfully");
+                    _context.Contracts.Add(contract);
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new { 
+                        isContract = true,
+                        fileId = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    });
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error extracting contract data: {Message}", ex.Message);
                     return StatusCode(500, $"Error extracting contract data: {ex.Message}");
                 }
-
-                _logger.LogInformation("Contract Type: {ContractType}", contract.ContractType);
-                _logger.LogInformation("Product: {Product}", contract.Product);
-                _logger.LogInformation("Saving file information to database");
-                _context.Contracts.Add(contract);
-                await _context.SaveChangesAsync();
-                _logger.LogInformation("File information saved to database");
-
-                return Ok(new { 
-                    text, 
-                    fileId = contract.Id,
-                    originalFileName = contract.OriginalFileName,
-                    blobStorageLocation = contract.BlobStorageLocation,
-                    contractType = contract.ContractType,
-                    product = contract.Product,
-                    price = contract.Price,
-                    volume = contract.Volume,
-                    deliveryTerms = contract.DeliveryTerms,
-                    appendix = contract.Appendix
-                });
             }
             catch (Exception ex)
             {
