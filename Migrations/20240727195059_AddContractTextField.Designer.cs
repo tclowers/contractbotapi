@@ -3,6 +3,7 @@ using System;
 using ContractBotApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ContractBotApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20240727195059_AddContractTextField")]
+    partial class AddContractTextField
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -52,8 +55,8 @@ namespace ContractBotApi.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Price")
-                        .HasColumnType("text");
+                    b.Property<decimal?>("Price")
+                        .HasColumnType("numeric");
 
                     b.Property<string>("Product")
                         .HasColumnType("text");
@@ -61,8 +64,8 @@ namespace ContractBotApi.Migrations
                     b.Property<DateTime>("UploadTimestamp")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Volume")
-                        .HasColumnType("text");
+                    b.Property<int?>("Volume")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
