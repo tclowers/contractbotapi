@@ -27,9 +27,9 @@ namespace ContractBotApi.Controllers
         private readonly BlobServiceClient _blobServiceClient;
         private readonly ILogger<GPTController> _logger;
 
-        public GPTController(HttpClient httpClient, IConfiguration configuration, ApplicationDbContext context, BlobServiceClient blobServiceClient, ILogger<GPTController> logger)
+        public GPTController(IHttpClientFactory httpClientFactory, IConfiguration configuration, ApplicationDbContext context, BlobServiceClient blobServiceClient, ILogger<GPTController> logger)
         {
-            _httpClient = httpClient;
+            _httpClient = httpClientFactory.CreateClient();
             _configuration = configuration;
             _context = context;
             _blobServiceClient = blobServiceClient;
@@ -126,23 +126,50 @@ namespace ContractBotApi.Controllers
                 }
                 _logger.LogInformation("Text extracted, length: {Length}", text.Length);
 
-                var uploadedFile = new UploadedFile
+                var contract = new Contract
                 {
                     OriginalFileName = file.FileName,
                     BlobStorageLocation = blobClient.Uri.ToString(),
-                    UploadTimestamp = DateTime.UtcNow
+                    UploadTimestamp = DateTime.UtcNow,
+                    ContractText = text
                 };
 
+                // Extract contract data using OpenAI API
+                _logger.LogInformation("Extracting contract data using OpenAI API");
+                var apiKey = _configuration["OpenAIApiKey"];
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    return BadRequest("OpenAI API key not found in configuration.");
+                }
+                try
+                {
+                    await contract.ExtractContractDataAsync(_httpClient, apiKey, text, _logger);
+                    _logger.LogInformation("Contract data extracted successfully");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error extracting contract data: {Message}", ex.Message);
+                    return StatusCode(500, $"Error extracting contract data: {ex.Message}");
+                }
+
+                _logger.LogInformation("Contract Type: {ContractType}", contract.ContractType);
+                _logger.LogInformation("Product: {Product}", contract.Product);
                 _logger.LogInformation("Saving file information to database");
-                _context.UploadedFiles.Add(uploadedFile);
+                _context.Contracts.Add(contract);
                 await _context.SaveChangesAsync();
                 _logger.LogInformation("File information saved to database");
 
                 return Ok(new { 
                     text, 
-                    fileId = uploadedFile.Id,
-                    originalFileName = uploadedFile.OriginalFileName,
-                    blobStorageLocation = uploadedFile.BlobStorageLocation
+                    fileId = contract.Id,
+                    originalFileName = contract.OriginalFileName,
+                    blobStorageLocation = contract.BlobStorageLocation,
+                    contractType = contract.ContractType,
+                    product = contract.Product,
+                    price = contract.Price,
+                    volume = contract.Volume,
+                    deliveryTerms = contract.DeliveryTerms,
+                    appendix = contract.Appendix
                 });
             }
             catch (Exception ex)

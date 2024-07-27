@@ -11,6 +11,6 @@ namespace ContractBotApi.Data
         }
 
         public DbSet<ConversationHistory> ConversationHistories { get; set; }
-        public DbSet<UploadedFile> UploadedFiles { get; set; }
+        public DbSet<Contract> Contracts { get; set; } = null!;
     }
 }
