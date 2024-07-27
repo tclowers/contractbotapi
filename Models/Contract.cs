@@ -65,7 +65,7 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
                     new { role = "user", content = new[] { new { type = "text", text = prompt } } }
                 },
                 temperature = 1,
-                max_tokens = 256,
+                max_tokens = 4096,
                 top_p = 1,
                 frequency_penalty = 0,
                 presence_penalty = 0
@@ -119,7 +119,7 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
                     }
                 },
                 temperature = 1,
-                max_tokens = 256,
+                max_tokens = 4096,
                 top_p = 1,
                 frequency_penalty = 0,
                 presence_penalty = 0
