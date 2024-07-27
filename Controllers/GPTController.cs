@@ -37,7 +37,7 @@ namespace ContractBotApi.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> Post([FromBody] GPTRequest request)
+        public async Task<IActionResult> Post([FromBody] ContractGPTRequest request)
         {
             var apiKey = _configuration["OpenAIApiKey"];
             if (string.IsNullOrEmpty(apiKey))
@@ -45,41 +45,26 @@ namespace ContractBotApi.Controllers
                 return BadRequest("OpenAI API key not found in configuration.");
             }
 
-            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-
-            var requestBody = new
+            try
             {
-                model = "gpt-4o-mini",
-                messages = new[]
-                {
-                    new { role = "user", content = request.Prompt }
-                }
-            };
-
-            var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-            var response = await _httpClient.PostAsync("https://api.openai.com/v1/chat/completions", content);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                var response = await request.Contract.ContractPrompt(_httpClient, apiKey, request.Prompt);
 
                 // Save conversation history
                 var conversationHistory = new ConversationHistory
                 {
                     UserId = "anonymous", // You may want to implement user authentication
                     Message = request.Prompt,
-                    Response = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString(),
+                    Response = response,
                     Timestamp = DateTime.UtcNow
                 };
                 _context.ConversationHistories.Add(conversationHistory);
                 await _context.SaveChangesAsync();
 
-                return Ok(jsonResponse);
+                return Ok(new { response });
             }
-            else
+            catch (HttpRequestException ex)
             {
-                return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+                return StatusCode(500, ex.Message);
             }
         }
 
@@ -335,5 +320,11 @@ namespace ContractBotApi.Controllers
     {
         public string FileName { get; set; }
         public string TextContent { get; set; }
+    }
+
+    public class ContractGPTRequest
+    {
+        public Contract Contract { get; set; }
+        public string Prompt { get; set; }
     }
 }

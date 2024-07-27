@@ -20,6 +20,72 @@ namespace ContractBotApi.Models
         public string? DeliveryTerms { get; set; }
         public string? Appendix { get; set; }
 
+        public async Task<string> ContractPrompt(HttpClient httpClient, string apiKey, string prompt)
+        {
+            httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+            var systemPrompt = $@"You are a state of the art contract parsing, interpreting, and editing engine. The user is going to submit a prompt related to the contract text below.
+
+If the user asks a question about the content of the contract, answer that user's question using the contract text as a reference.
+
+Some examples of questions about the contract would be:
+""Explain Clause 13b to me in concise terms""
+""Summarize the content of the attached file""
+
+When a user asks this type of question, respond in this JSON format:
+{{
+""prompt_type"": ""query"",
+""prompt_response"": ""{{{{response text goes here}}}}""
+}}
+
+If the user submits a prompt that relates to making a change, or an edit to the contract, even if this request is in the form of a question, update the text of the contract accordingly and return it as the ""updated_text"" field, note that this type of prompt is a ""contract edit"", and send a short ""prompt_response"" explaining the change you have made.
+
+When a user requests a contract edit, respond in this JSON format:
+{{
+""prompt_type"": ""contract_edit"",
+""prompt_response"": ""{{{{response text goes here}}}}"",
+""updated_text"": ""{{{{complete text of the updated contract goes here}}}}""
+}}
+
+Some examples of prompts that might result in an edit would be:
+""Rewrite this contract, replacing 'biodiesel' with 'SAF' throughout the document""
+""Can you change the delivery date to December 3, 2025?""
+
+Here is the Contract Text. All prompts submitted by the user will be in reference to this contract text:
+""""""
+{this.ContractText}
+""""""";
+
+            var requestBody = new
+            {
+                model = "gpt-4o",
+                messages = new[]
+                {
+                    new { role = "system", content = new[] { new { type = "text", text = systemPrompt } } },
+                    new { role = "user", content = new[] { new { type = "text", text = prompt } } }
+                },
+                temperature = 1,
+                max_tokens = 256,
+                top_p = 1,
+                frequency_penalty = 0,
+                presence_penalty = 0
+            };
+
+            var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+            var response = await httpClient.PostAsync("https://api.openai.com/v1/chat/completions", content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                return jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            }
+            else
+            {
+                throw new HttpRequestException($"Error: {response.StatusCode}, {await response.Content.ReadAsStringAsync()}");
+            }
+        }
+
         public async Task<bool> ExtractContractDataAsync(HttpClient httpClient, string apiKey, string contractText, ILogger logger)
         {
             var requestBody = new
