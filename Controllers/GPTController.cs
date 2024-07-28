@@ -138,22 +138,121 @@ namespace ContractBotApi.Controllers
                     }
 
                     _logger.LogInformation("Contract data extracted successfully");
-                    _context.Contracts.Add(contract);
+                    Contract contractToAdd;
+                    switch (contract.ContractType.ToLower())
+                    {
+                        case "forward contract":
+                            var forwardContract = new ForwardContract
+                            {
+                                OriginalFileName = contract.OriginalFileName,
+                                BlobStorageLocation = contract.BlobStorageLocation,
+                                UploadTimestamp = contract.UploadTimestamp,
+                                ContractText = contract.ContractText,
+                                ContractType = contract.ContractType,
+                                Product = contract.Product,
+                                Price = contract.Price,
+                                Volume = contract.Volume,
+                                DeliveryTerms = contract.DeliveryTerms,
+                                Appendix = contract.Appendix,
+                            };
+                            // TODO: This should be implemented for other contract types
+                            await forwardContract.ExtractForwardContractDataAsync(_httpClient, apiKey, _logger);
+                            contractToAdd = forwardContract;
+                            break;
+                        case "spot contract":
+                            contractToAdd = new SpotContract
+                            {
+                                OriginalFileName = contract.OriginalFileName,
+                                BlobStorageLocation = contract.BlobStorageLocation,
+                                UploadTimestamp = contract.UploadTimestamp,
+                                ContractText = contract.ContractText,
+                                ContractType = contract.ContractType,
+                                Product = contract.Product,
+                                Price = contract.Price,
+                                Volume = contract.Volume,
+                                DeliveryTerms = contract.DeliveryTerms,
+                                Appendix = contract.Appendix,
+                            };
+                            break;
+                        case "option contract":
+                            contractToAdd = new OptionContract
+                            {
+                                OriginalFileName = contract.OriginalFileName,
+                                BlobStorageLocation = contract.BlobStorageLocation,
+                                UploadTimestamp = contract.UploadTimestamp,
+                                ContractText = contract.ContractText,
+                                ContractType = contract.ContractType,
+                                Product = contract.Product,
+                                Price = contract.Price,
+                                Volume = contract.Volume,
+                                DeliveryTerms = contract.DeliveryTerms,
+                                Appendix = contract.Appendix,
+                            };
+                            break;
+                        case "swap contract":
+                            contractToAdd = new SwapContract
+                            {
+                                OriginalFileName = contract.OriginalFileName,
+                                BlobStorageLocation = contract.BlobStorageLocation,
+                                UploadTimestamp = contract.UploadTimestamp,
+                                ContractText = contract.ContractText,
+                                ContractType = contract.ContractType,
+                                Product = contract.Product,
+                                Price = contract.Price,
+                                Volume = contract.Volume,
+                                DeliveryTerms = contract.DeliveryTerms,
+                                Appendix = contract.Appendix,
+                            };
+                            break;
+                        default:
+                            contractToAdd = contract;
+                            break;
+                    }
+
+                    _context.Contracts.Add(contractToAdd);
                     await _context.SaveChangesAsync();
 
-                    return Ok(new { 
-                        isContract = true,
-                        fileId = contract.Id,
-                        originalFileName = contract.OriginalFileName,
-                        blobStorageLocation = contract.BlobStorageLocation,
-                        contractText = contract.ContractText,
-                        contractType = contract.ContractType,
-                        product = contract.Product,
-                        price = contract.Price,
-                        volume = contract.Volume,
-                        deliveryTerms = contract.DeliveryTerms,
-                        appendix = contract.Appendix
-                    });
+                    object response;
+
+                    if (contractToAdd is ForwardContract forwardContractDetails)
+                    {
+                        response = new
+                        {
+                            isContract = true,
+                            fileId = contractToAdd.Id,
+                            originalFileName = contractToAdd.OriginalFileName,
+                            blobStorageLocation = contractToAdd.BlobStorageLocation,
+                            contractText = contractToAdd.ContractText,
+                            contractType = contractToAdd.ContractType,
+                            product = contractToAdd.Product,
+                            price = contractToAdd.Price,
+                            volume = contractToAdd.Volume,
+                            deliveryTerms = contractToAdd.DeliveryTerms,
+                            appendix = contractToAdd.Appendix,
+                            futureDeliveryDate = forwardContractDetails.FutureDeliveryDate,
+                            settlementTerms = forwardContractDetails.SettlementTerms,
+                            forwardPrice = forwardContractDetails.ForwardPrice
+                        };
+                    }
+                    else
+                    {
+                        response = new
+                        {
+                            isContract = true,
+                            fileId = contractToAdd.Id,
+                            originalFileName = contractToAdd.OriginalFileName,
+                            blobStorageLocation = contractToAdd.BlobStorageLocation,
+                            contractText = contractToAdd.ContractText,
+                            contractType = contractToAdd.ContractType,
+                            product = contractToAdd.Product,
+                            price = contractToAdd.Price,
+                            volume = contractToAdd.Volume,
+                            deliveryTerms = contractToAdd.DeliveryTerms,
+                            appendix = contractToAdd.Appendix
+                        };
+                    }
+
+                    return Ok(response);
                 }
                 catch (Exception ex)
                 {
