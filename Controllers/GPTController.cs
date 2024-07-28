@@ -308,6 +308,71 @@ namespace ContractBotApi.Controllers
             }
         }
 
+        [HttpGet("contract/{id}")]
+        public async Task<IActionResult> GetContract(int id)
+        {
+            try
+            {
+                var contract = await _context.Contracts
+                    .FirstOrDefaultAsync(c => c.Id == id);
+
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
+                var forwardContract = await _context.Set<ForwardContract>()
+                    .FirstOrDefaultAsync(fc => fc.Id == id);
+
+                object response;
+
+                if (forwardContract != null)
+                {
+                    response = new
+                    {
+                        isContract = true,
+                        id = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix,
+                        futureDeliveryDate = forwardContract.FutureDeliveryDate,
+                        settlementTerms = forwardContract.SettlementTerms,
+                        forwardPrice = forwardContract.ForwardPrice
+                    };
+                }
+                else
+                {
+                    response = new
+                    {
+                        isContract = true,
+                        id = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    };
+                }
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving contract: {Message}", ex.Message);
+                return StatusCode(500, $"Error retrieving contract: {ex.Message}");
+            }
+        }
+
         private string ExtractTextFromPdf(Stream pdfStream)
         {
             var sb = new StringBuilder();
