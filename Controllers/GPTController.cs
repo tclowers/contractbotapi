@@ -248,16 +248,23 @@ namespace ContractBotApi.Controllers
             }
         }
 
-        [HttpPost("generate-pdf")]
-        public async Task<IActionResult> GeneratePdf([FromBody] PdfGenerationRequest request)
+        [HttpPatch("edit-contract/{id}")]
+        public async Task<IActionResult> EditContract(int id, [FromBody] PdfGenerationRequest request)
         {
-            if (string.IsNullOrEmpty(request.FileName) || string.IsNullOrEmpty(request.TextContent))
+            if (string.IsNullOrEmpty(request.TextContent))
             {
-                return BadRequest("FileName and TextContent are required.");
+                return BadRequest("TextContent is required.");
             }
 
             try
             {
+                // Fetch the contract from the database
+                var contract = await _context.Contracts.FindAsync(id);
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
                 // Generate PDF
                 byte[] pdfBytes;
                 using (MemoryStream ms = new MemoryStream())
@@ -274,14 +281,44 @@ namespace ContractBotApi.Controllers
                 var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
                 await containerClient.CreateIfNotExistsAsync();
 
-                var blobClient = containerClient.GetBlobClient(request.FileName);
+                var blobClient = containerClient.GetBlobClient(contract.OriginalFileName);
 
                 using (MemoryStream stream = new MemoryStream(pdfBytes))
                 {
                     await blobClient.UploadAsync(stream, true);
                 }
 
-                return Ok(new { message = "PDF generated and uploaded successfully", blobUrl = blobClient.Uri.ToString() });
+                // Extract contract data
+                var apiKey = _configuration["OpenAIApiKey"];
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    return BadRequest("OpenAI API key not found in configuration.");
+                }
+
+                bool isContract = await contract.ExtractContractDataAsync(_httpClient, apiKey, request.TextContent, _logger);
+                if (!isContract)
+                {
+                    return BadRequest("The updated text is not recognized as a valid contract.");
+                }
+
+                // Update the contract in the database
+                contract.ContractText = request.TextContent;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { 
+                    message = "PDF generated, uploaded, and contract data updated successfully", 
+                    blobUrl = blobClient.Uri.ToString(),
+                    updatedContract = new
+                    {
+                        id = contract.Id,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -481,7 +518,6 @@ namespace ContractBotApi.Controllers
 
     public class PdfGenerationRequest
     {
-        public string FileName { get; set; }
         public string TextContent { get; set; }
     }
 
