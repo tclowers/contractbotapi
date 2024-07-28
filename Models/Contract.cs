@@ -3,6 +3,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Azure.Storage.Blobs;
+using ContractBotApi.Data;
+using Microsoft.Extensions.Logging;
 
 namespace ContractBotApi.Models
 {
@@ -20,7 +23,7 @@ namespace ContractBotApi.Models
         public string? DeliveryTerms { get; set; }
         public string? Appendix { get; set; }
 
-        public async Task<string> ContractPrompt(HttpClient httpClient, string apiKey, string prompt)
+        public async Task<string> ContractPrompt(HttpClient httpClient, string apiKey, string prompt, BlobServiceClient blobServiceClient, ApplicationDbContext context, ILogger logger)
         {
             httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
@@ -78,7 +81,37 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
                 var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-                return jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+                var gptResponse = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+
+                var parsedResponse = JsonSerializer.Deserialize<JsonElement>(gptResponse);
+                var promptType = parsedResponse.GetProperty("prompt_type").GetString();
+
+                if (promptType == "contract_edit")
+                {
+                    var updatedText = parsedResponse.GetProperty("updated_text").GetString();
+
+                    // Update Azure Blob Storage
+                    var containerClient = blobServiceClient.GetBlobContainerClient("pdfs");
+                    var blobClient = containerClient.GetBlobClient(this.OriginalFileName);
+                    using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(updatedText)))
+                    {
+                        await blobClient.UploadAsync(stream, true);
+                    }
+
+                    // Update database
+                    this.ContractText = updatedText;
+                    context.Update(this);
+                    await context.SaveChangesAsync();
+
+                    // Re-extract contract data
+                    await this.ExtractContractDataAsync(httpClient, apiKey, updatedText, logger);
+
+                    return gptResponse;
+                }
+                else
+                {
+                    return gptResponse;
+                }
             }
             else
             {

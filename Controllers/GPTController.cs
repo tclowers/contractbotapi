@@ -37,8 +37,8 @@ namespace ContractBotApi.Controllers
             _logger = logger;
         }
 
-        [HttpPost]
-        public async Task<IActionResult> Post([FromBody] ContractGPTRequest request)
+        [HttpPost("contract/{id}/prompt")]
+        public async Task<IActionResult> Post(int id, [FromBody] GPTRequest request)
         {
             var apiKey = _configuration["OpenAIApiKey"];
             if (string.IsNullOrEmpty(apiKey))
@@ -48,7 +48,13 @@ namespace ContractBotApi.Controllers
 
             try
             {
-                var response = await request.Contract.ContractPrompt(_httpClient, apiKey, request.Prompt);
+                var contract = await _context.Contracts.FindAsync(id);
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
+                var response = await contract.ContractPrompt(_httpClient, apiKey, request.Prompt, _blobServiceClient, _context, _logger);
 
                 // Save conversation history
                 var conversationHistory = new ConversationHistory
@@ -61,7 +67,41 @@ namespace ContractBotApi.Controllers
                 _context.ConversationHistories.Add(conversationHistory);
                 await _context.SaveChangesAsync();
 
-                return Ok(new { response });
+                // Fetch the updated contract details
+                var updatedContract = await _context.Contracts.FindAsync(id);
+
+                object contractDetails;
+                if (updatedContract is ForwardContract forwardContract)
+                {
+                    contractDetails = new
+                    {
+                        id = forwardContract.Id,
+                        contractType = forwardContract.ContractType,
+                        product = forwardContract.Product,
+                        price = forwardContract.Price,
+                        volume = forwardContract.Volume,
+                        deliveryTerms = forwardContract.DeliveryTerms,
+                        appendix = forwardContract.Appendix,
+                        futureDeliveryDate = forwardContract.FutureDeliveryDate,
+                        settlementTerms = forwardContract.SettlementTerms,
+                        forwardPrice = forwardContract.ForwardPrice
+                    };
+                }
+                else
+                {
+                    contractDetails = new
+                    {
+                        id = updatedContract.Id,
+                        contractType = updatedContract.ContractType,
+                        product = updatedContract.Product,
+                        price = updatedContract.Price,
+                        volume = updatedContract.Volume,
+                        deliveryTerms = updatedContract.DeliveryTerms,
+                        appendix = updatedContract.Appendix
+                    };
+                }
+
+                return Ok(new { response, updatedContract = contractDetails });
             }
             catch (HttpRequestException ex)
             {
@@ -513,17 +553,11 @@ namespace ContractBotApi.Controllers
 
     public class GPTRequest
     {
-        public string? Prompt { get; set; }
+        public string Prompt { get; set; }
     }
 
     public class PdfGenerationRequest
     {
         public string TextContent { get; set; }
-    }
-
-    public class ContractGPTRequest
-    {
-        public Contract Contract { get; set; }
-        public string Prompt { get; set; }
     }
 }
