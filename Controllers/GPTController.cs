@@ -14,6 +14,7 @@ using System.Text.RegularExpressions;
 using iTextSharp.text;
 using iTextSharp.text.pdf;
 using System.IO;
+using Microsoft.EntityFrameworkCore;
 
 namespace ContractBotApi.Controllers
 {
@@ -87,6 +88,10 @@ namespace ContractBotApi.Controllers
 
             try
             {
+                // Check if a contract with the same filename already exists
+                var existingContract = await _context.Contracts
+                    .FirstOrDefaultAsync(c => c.OriginalFileName == file.FileName);
+
                 // Upload to Azure Blob Storage
                 _logger.LogInformation("Getting blob container client");
                 var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
@@ -111,13 +116,26 @@ namespace ContractBotApi.Controllers
                 }
                 _logger.LogInformation("Text extracted, length: {Length}", text.Length);
 
-                var contract = new Contract
+                Contract contract;
+                if (existingContract != null)
                 {
-                    OriginalFileName = file.FileName,
-                    BlobStorageLocation = blobClient.Uri.ToString(),
-                    UploadTimestamp = DateTime.UtcNow,
-                    ContractText = text
-                };
+                    // Update existing contract
+                    contract = existingContract;
+                    contract.BlobStorageLocation = blobClient.Uri.ToString();
+                    contract.UploadTimestamp = DateTime.UtcNow;
+                    contract.ContractText = text;
+                }
+                else
+                {
+                    // Create new contract
+                    contract = new Contract
+                    {
+                        OriginalFileName = file.FileName,
+                        BlobStorageLocation = blobClient.Uri.ToString(),
+                        UploadTimestamp = DateTime.UtcNow,
+                        ContractText = text
+                    };
+                }
 
                 // Extract contract data using OpenAI API
                 _logger.LogInformation("Extracting contract data using OpenAI API");
@@ -144,6 +162,7 @@ namespace ContractBotApi.Controllers
                         case "forward contract":
                             var forwardContract = new ForwardContract
                             {
+                                Id = contract.Id,
                                 OriginalFileName = contract.OriginalFileName,
                                 BlobStorageLocation = contract.BlobStorageLocation,
                                 UploadTimestamp = contract.UploadTimestamp,
@@ -155,61 +174,23 @@ namespace ContractBotApi.Controllers
                                 DeliveryTerms = contract.DeliveryTerms,
                                 Appendix = contract.Appendix,
                             };
-                            // TODO: This should be implemented for other contract types
                             await forwardContract.ExtractForwardContractDataAsync(_httpClient, apiKey, _logger);
                             contractToAdd = forwardContract;
                             break;
-                        case "spot contract":
-                            contractToAdd = new SpotContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
-                        case "option contract":
-                            contractToAdd = new OptionContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
-                        case "swap contract":
-                            contractToAdd = new SwapContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
+                        // TODO: Implement other contract types
                         default:
                             contractToAdd = contract;
                             break;
                     }
 
-                    _context.Contracts.Add(contractToAdd);
+                    if (existingContract != null)
+                    {
+                        _context.Entry(existingContract).CurrentValues.SetValues(contractToAdd);
+                    }
+                    else
+                    {
+                        _context.Contracts.Add(contractToAdd);
+                    }
                     await _context.SaveChangesAsync();
 
                     object response;
