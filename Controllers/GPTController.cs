@@ -200,7 +200,7 @@ namespace ContractBotApi.Controllers
                         response = new
                         {
                             isContract = true,
-                            fileId = contractToAdd.Id,
+                            id = contractToAdd.Id,
                             originalFileName = contractToAdd.OriginalFileName,
                             blobStorageLocation = contractToAdd.BlobStorageLocation,
                             contractText = contractToAdd.ContractText,
@@ -220,7 +220,7 @@ namespace ContractBotApi.Controllers
                         response = new
                         {
                             isContract = true,
-                            fileId = contractToAdd.Id,
+                            id = contractToAdd.Id,
                             originalFileName = contractToAdd.OriginalFileName,
                             blobStorageLocation = contractToAdd.BlobStorageLocation,
                             contractText = contractToAdd.ContractText,
@@ -287,6 +287,24 @@ namespace ContractBotApi.Controllers
             {
                 _logger.LogError(ex, "Error generating or uploading PDF: {Message}", ex.Message);
                 return StatusCode(500, $"Error generating or uploading PDF: {ex.Message}");
+            }
+        }
+
+        [HttpGet("contracts")]
+        public async Task<IActionResult> GetContracts()
+        {
+            try
+            {
+                var contracts = await _context.Contracts
+                    .Select(c => new { c.Id, c.OriginalFileName })
+                    .ToListAsync();
+
+                return Ok(contracts);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving contracts: {Message}", ex.Message);
+                return StatusCode(500, $"Error retrieving contracts: {ex.Message}");
             }
         }
 
