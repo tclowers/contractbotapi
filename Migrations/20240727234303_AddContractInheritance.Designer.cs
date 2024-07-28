@@ -3,6 +3,7 @@ using System;
 using ContractBotApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ContractBotApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20240727234303_AddContractInheritance")]
+    partial class AddContractInheritance
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -48,6 +51,11 @@ namespace ContractBotApi.Migrations
                     b.Property<string>("DeliveryTerms")
                         .HasColumnType("text");
 
+                    b.Property<string>("Discriminator")
+                        .IsRequired()
+                        .HasMaxLength(21)
+                        .HasColumnType("character varying(21)");
+
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
                         .HasColumnType("text");
@@ -66,9 +74,11 @@ namespace ContractBotApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Contracts", (string)null);
+                    b.ToTable("Contracts");
 
-                    b.UseTptMappingStrategy();
+                    b.HasDiscriminator().HasValue("Contract");
+
+                    b.UseTphMappingStrategy();
                 });
 
             modelBuilder.Entity("ContractBotApi.Models.ConversationHistory", b =>
@@ -112,7 +122,7 @@ namespace ContractBotApi.Migrations
                     b.Property<string>("SettlementTerms")
                         .HasColumnType("text");
 
-                    b.ToTable("ForwardContracts", (string)null);
+                    b.HasDiscriminator().HasValue("ForwardContract");
                 });
 
             modelBuilder.Entity("ContractBotApi.Models.OptionContract", b =>
@@ -128,7 +138,7 @@ namespace ContractBotApi.Migrations
                     b.Property<string>("StrikePrice")
                         .HasColumnType("text");
 
-                    b.ToTable("OptionContracts", (string)null);
+                    b.HasDiscriminator().HasValue("OptionContract");
                 });
 
             modelBuilder.Entity("ContractBotApi.Models.SpotContract", b =>
@@ -144,7 +154,7 @@ namespace ContractBotApi.Migrations
                     b.Property<DateTime?>("SettlementDate")
                         .HasColumnType("timestamp with time zone");
 
-                    b.ToTable("SpotContracts", (string)null);
+                    b.HasDiscriminator().HasValue("SpotContract");
                 });
 
             modelBuilder.Entity("ContractBotApi.Models.SwapContract", b =>
@@ -160,43 +170,7 @@ namespace ContractBotApi.Migrations
                     b.Property<string>("UnderlyingAsset")
                         .HasColumnType("text");
 
-                    b.ToTable("SwapContracts", (string)null);
-                });
-
-            modelBuilder.Entity("ContractBotApi.Models.ForwardContract", b =>
-                {
-                    b.HasOne("ContractBotApi.Models.Contract", null)
-                        .WithOne()
-                        .HasForeignKey("ContractBotApi.Models.ForwardContract", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("ContractBotApi.Models.OptionContract", b =>
-                {
-                    b.HasOne("ContractBotApi.Models.Contract", null)
-                        .WithOne()
-                        .HasForeignKey("ContractBotApi.Models.OptionContract", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("ContractBotApi.Models.SpotContract", b =>
-                {
-                    b.HasOne("ContractBotApi.Models.Contract", null)
-                        .WithOne()
-                        .HasForeignKey("ContractBotApi.Models.SpotContract", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("ContractBotApi.Models.SwapContract", b =>
-                {
-                    b.HasOne("ContractBotApi.Models.Contract", null)
-                        .WithOne()
-                        .HasForeignKey("ContractBotApi.Models.SwapContract", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                    b.HasDiscriminator().HasValue("SwapContract");
                 });
 #pragma warning restore 612, 618
         }
