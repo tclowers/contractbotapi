@@ -61,7 +61,7 @@ namespace ContractBotApi.Controllers
                 {
                     UserId = "anonymous", // You may want to implement user authentication
                     Message = request.Prompt,
-                    Response = response,
+                    Response = JsonSerializer.Serialize(response),
                     Timestamp = DateTime.UtcNow
                 };
                 _context.ConversationHistories.Add(conversationHistory);
