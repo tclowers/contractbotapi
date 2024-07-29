@@ -165,97 +165,62 @@ namespace ContractBotApi.Controllers
                 {
                     return Ok(new { isContract = false, message = "The uploaded document is not a contract." });
                 }
+                _logger.LogInformation("Classification result: {ClassificationResult}", classificationResult);
 
                 string contractType = classificationResult.ContractType;
                 Contract contract = ContractFactory.CreateContract(contractType);
                 contract.ContractType = contractType;
                 await _contractService.ExtractContractDataAsync(contract, text);
 
+                // Ensure all required fields are populated
+                contract.OriginalFileName = file.FileName;
+                contract.BlobStorageLocation = blobClient.Uri.ToString();
+                contract.UploadTimestamp = DateTime.UtcNow;
+                contract.ContractText = text;
+                contract.DeliveryTerms = contract.DeliveryTerms ?? "Not specified";
+                contract.Product = contract.Product ?? "Not specified";
+                contract.Price = contract.Price ?? "Not specified";
+                contract.Volume = contract.Volume ?? "Not specified";
+                contract.Appendix = contract.Appendix ?? "Not specified";
+
                 if (existingContract != null)
                 {
                     // Update existing contract
-                    contract = existingContract;
-                    contract.BlobStorageLocation = blobClient.Uri.ToString();
-                    contract.UploadTimestamp = DateTime.UtcNow;
-                    contract.ContractText = text;
+                    contract.Id = existingContract.Id; // Preserve the existing Id
+                    _context.Entry(existingContract).CurrentValues.SetValues(contract);
+                    _context.Entry(existingContract).State = EntityState.Modified;
                 }
                 else
                 {
                     // Create new contract
-                    contract.OriginalFileName = file.FileName;
-                    contract.BlobStorageLocation = blobClient.Uri.ToString();
-                    contract.UploadTimestamp = DateTime.UtcNow;
-                    contract.ContractText = text;
+                    _context.Contracts.Add(contract);
                 }
 
-                // Extract contract data using OpenAI API
-                _logger.LogInformation("Extracting contract data using OpenAI API");
-                var apiKey = _configuration["OpenAIApiKey"];
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    return BadRequest("OpenAI API key not found in configuration.");
-                }
                 try
                 {
-                    _logger.LogInformation("Contract data extracted successfully");
-                    Contract contractToAdd = contract;
-
-                    if (existingContract != null)
-                    {
-                        _context.Entry(existingContract).CurrentValues.SetValues(contractToAdd);
-                    }
-                    else
-                    {
-                        _context.Contracts.Add(contractToAdd);
-                    }
                     await _context.SaveChangesAsync();
 
-                    object response;
-
-                    if (contractToAdd is ForwardContract forwardContractDetails)
+                    var response = new
                     {
-                        response = new
-                        {
-                            isContract = true,
-                            id = forwardContractDetails.Id,
-                            originalFileName = forwardContractDetails.OriginalFileName,
-                            blobStorageLocation = forwardContractDetails.BlobStorageLocation,
-                            contractText = forwardContractDetails.ContractText,
-                            contractType = forwardContractDetails.ContractType,
-                            product = forwardContractDetails.Product,
-                            price = forwardContractDetails.Price,
-                            volume = forwardContractDetails.Volume,
-                            deliveryTerms = forwardContractDetails.DeliveryTerms,
-                            appendix = forwardContractDetails.Appendix,
-                            futureDeliveryDate = forwardContractDetails.FutureDeliveryDate,
-                            settlementTerms = forwardContractDetails.SettlementTerms,
-                            forwardPrice = forwardContractDetails.ForwardPrice
-                        };
-                    }
-                    else
-                    {
-                        response = new
-                        {
-                            isContract = true,
-                            id = contractToAdd.Id,
-                            originalFileName = contractToAdd.OriginalFileName,
-                            blobStorageLocation = contractToAdd.BlobStorageLocation,
-                            contractText = contractToAdd.ContractText,
-                            contractType = contractToAdd.ContractType,
-                            product = contractToAdd.Product,
-                            price = contractToAdd.Price,
-                            volume = contractToAdd.Volume,
-                            deliveryTerms = contractToAdd.DeliveryTerms,
-                            appendix = contractToAdd.Appendix
-                        };
-                    }
+                        isContract = true,
+                        id = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    };
 
                     return Ok(response);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error extracting contract data: {Message}", ex.Message);
-                    return StatusCode(500, $"Error extracting contract data: {ex.Message}");
+                    _logger.LogError(ex, "Error saving contract data: {Message}", ex.Message);
+                    return StatusCode(500, $"Error saving contract data: {ex.Message}");
                 }
             }
             catch (Exception ex)

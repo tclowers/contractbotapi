@@ -20,7 +20,7 @@ namespace ContractBotApi.Models
         public string Product { get; set; }
         public string Price { get; set; }
         public string Volume { get; set; }
-        public string DeliveryTerms { get; set; }
+        public string? DeliveryTerms { get; set; }
         public string Appendix { get; set; }
 
         public abstract Task<string> GetSpecialFields();

@@ -146,7 +146,7 @@ public class ContractService
                         new
                         {
                             type = "text",
-                            text = $"You are a state of the art contract parsing engine. The user will submit a contract in plain text format. You will extract certain important data points and respond with this information in JSON format.\n\nYou will extract these data points from the contract text:\nProduct (e.g. hydrogen, SAF, ammonia),\nPrice,\nVolume,\nDeliveryTerms,\nAppendix containing legal terms\n{specialFields}\n\nThe JSON response should be in this format:\n\"\"\"\n{{\"product\": \"{{{{contract product}}}}\",\n  \"price\": \"{{{{product price}}}}\",\n  \"volume\": \"{{{{volume of product}}}}\",\n  \"delivery_terms\": \"{{{{contract delivery terms}}}}\",\n  \"appendix\": \"{{{{appendix of useful legal terms}}}}\", {fieldFormatting}\n}}\n\"\"\""
+                            text = $"You are a state of the art contract parsing engine. The user will submit a contract in plain text format. You will extract certain important data points and respond with this information in JSON format.\n\nYou will extract these data points from the contract text:\nProduct (e.g. hydrogen, SAF, ammonia),\nPrice,\nVolume,\nDelivery Terms,\nAppendix containing legal terms\n{specialFields}\n\nThe JSON response should be in this format:\n\"\"\"\n{{\"product\": \"{{{{contract product}}}}\",\n  \"price\": \"{{{{product price}}}}\",\n  \"volume\": \"{{{{volume of product}}}}\",\n  \"delivery_terms\": \"{{{{delivery terms}}}}\",\n  \"appendix\": \"{{{{appendix of useful legal terms}}}}\", {fieldFormatting}\n}}\n\"\"\""
                         }
                     }
                 },
@@ -177,6 +177,7 @@ public class ContractService
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.Content.ReadAsStringAsync();
+            _logger.LogInformation("Response content: {ResponseContent}", responseContent);
             var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
             var extractedDataString = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
             
