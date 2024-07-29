@@ -51,6 +51,17 @@ if (string.IsNullOrEmpty(azureStorageConnectionString))
 Console.WriteLine($"Azure Storage connection string: {azureStorageConnectionString?.Substring(0, Math.Min(azureStorageConnectionString.Length, 20))}...");
 builder.Services.AddSingleton(x => new BlobServiceClient(azureStorageConnectionString));
 
+// Add ContractService
+builder.Services.AddScoped<ContractService>(provider =>
+{
+    var httpClient = provider.GetRequiredService<HttpClient>();
+    var apiKey = builder.Configuration["OpenAIApiKey"];
+    return new ContractService(httpClient, apiKey, provider.GetRequiredService<ApplicationDbContext>(), provider.GetRequiredService<BlobServiceClient>(), provider.GetRequiredService<ILogger<ContractService>>());
+});
+
+// Add PdfService
+builder.Services.AddScoped<PdfService>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
