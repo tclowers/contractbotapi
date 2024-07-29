@@ -309,10 +309,24 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
 
                 if (promptType == "contract_edit")
                 {
+                    // Create a new PDF with the updated text
+                    byte[] pdfBytes;
+                    using (var ms = new MemoryStream())
+                    {
+                        using (var document = new Document())
+                        {
+                            PdfWriter.GetInstance(document, ms);
+                            document.Open();
+                            document.Add(new Paragraph(updatedText));
+                            document.Close();
+                        }
+                        pdfBytes = ms.ToArray();
+                    }
+
                     // Update Azure Blob Storage
                     var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
                     var blobClient = containerClient.GetBlobClient(contract.OriginalFileName);
-                    using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(updatedText)))
+                    using (var stream = new MemoryStream(pdfBytes))
                     {
                         await blobClient.UploadAsync(stream, true);
                     }
