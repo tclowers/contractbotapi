@@ -3,6 +3,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Azure.Storage.Blobs;
+using ContractBotApi.Data;
+using Microsoft.Extensions.Logging;
 
 namespace ContractBotApi.Models
 {
@@ -20,7 +23,7 @@ namespace ContractBotApi.Models
         public string? DeliveryTerms { get; set; }
         public string? Appendix { get; set; }
 
-        public async Task<string> ContractPrompt(HttpClient httpClient, string apiKey, string prompt)
+        public async Task<object> ContractPrompt(HttpClient httpClient, string apiKey, string prompt, BlobServiceClient blobServiceClient, ApplicationDbContext context, ILogger logger)
         {
             httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
@@ -35,7 +38,7 @@ Some examples of questions about the contract would be:
 When a user asks this type of question, respond in this JSON format:
 {{
 ""prompt_type"": ""query"",
-""prompt_response"": ""{{{{response text goes here}}}}""
+""prompt_response"": ""{{response text goes here}}""
 }}
 
 If the user submits a prompt that relates to making a change, or an edit to the contract, even if this request is in the form of a question, update the text of the contract accordingly and return it as the ""updated_text"" field, note that this type of prompt is a ""contract edit"", and send a short ""prompt_response"" explaining the change you have made.
@@ -43,8 +46,8 @@ If the user submits a prompt that relates to making a change, or an edit to the 
 When a user requests a contract edit, respond in this JSON format:
 {{
 ""prompt_type"": ""contract_edit"",
-""prompt_response"": ""{{{{response text goes here}}}}"",
-""updated_text"": ""{{{{complete text of the updated contract goes here}}}}""
+""prompt_response"": ""{{response text goes here}}"",
+""updated_text"": ""{{complete text of the updated contract goes here}}""
 }}
 
 Some examples of prompts that might result in an edit would be:
@@ -78,7 +81,53 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
                 var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-                return jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+                var gptResponse = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+
+                // Extract JSON content from the response
+                var jsonStartIndex = gptResponse.IndexOf('{');
+                var jsonEndIndex = gptResponse.LastIndexOf('}');
+                if (jsonStartIndex >= 0 && jsonEndIndex >= 0 && jsonEndIndex > jsonStartIndex)
+                {
+                    gptResponse = gptResponse.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+                }
+
+                try
+                {
+                    var parsedResponse = JsonSerializer.Deserialize<JsonElement>(gptResponse);
+                    var promptType = parsedResponse.GetProperty("prompt_type").GetString();
+                    var promptResponse = parsedResponse.GetProperty("prompt_response").GetString();
+                    var updatedText = promptType == "contract_edit" ? parsedResponse.GetProperty("updated_text").GetString() : null;
+
+                    if (promptType == "contract_edit")
+                    {
+                        // Update Azure Blob Storage
+                        var containerClient = blobServiceClient.GetBlobContainerClient("pdfs");
+                        var blobClient = containerClient.GetBlobClient(this.OriginalFileName);
+                        using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(updatedText)))
+                        {
+                            await blobClient.UploadAsync(stream, true);
+                        }
+
+                        // Update database
+                        this.ContractText = updatedText;
+                        context.Update(this);
+                        await context.SaveChangesAsync();
+
+                        // Re-extract contract data
+                        await this.ExtractContractDataAsync(httpClient, apiKey, updatedText, logger);
+                    }
+
+                    return new { 
+                        prompt_type = promptType,
+                        prompt_response = promptResponse,
+                        updated_text = updatedText
+                    };
+                }
+                catch (JsonException ex)
+                {
+                    logger.LogError(ex, "Error parsing GPT response: {Response}", gptResponse);
+                    throw new Exception($"Error parsing GPT response: {ex.Message}. Raw response: {gptResponse}");
+                }
             }
             else
             {

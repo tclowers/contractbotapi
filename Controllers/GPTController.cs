@@ -14,6 +14,7 @@ using System.Text.RegularExpressions;
 using iTextSharp.text;
 using iTextSharp.text.pdf;
 using System.IO;
+using Microsoft.EntityFrameworkCore;
 
 namespace ContractBotApi.Controllers
 {
@@ -36,8 +37,8 @@ namespace ContractBotApi.Controllers
             _logger = logger;
         }
 
-        [HttpPost]
-        public async Task<IActionResult> Post([FromBody] ContractGPTRequest request)
+        [HttpPost("contract/{id}/prompt")]
+        public async Task<IActionResult> Post(int id, [FromBody] GPTRequest request)
         {
             var apiKey = _configuration["OpenAIApiKey"];
             if (string.IsNullOrEmpty(apiKey))
@@ -47,20 +48,60 @@ namespace ContractBotApi.Controllers
 
             try
             {
-                var response = await request.Contract.ContractPrompt(_httpClient, apiKey, request.Prompt);
+                var contract = await _context.Contracts.FindAsync(id);
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
+                var response = await contract.ContractPrompt(_httpClient, apiKey, request.Prompt, _blobServiceClient, _context, _logger);
 
                 // Save conversation history
                 var conversationHistory = new ConversationHistory
                 {
                     UserId = "anonymous", // You may want to implement user authentication
                     Message = request.Prompt,
-                    Response = response,
+                    Response = JsonSerializer.Serialize(response),
                     Timestamp = DateTime.UtcNow
                 };
                 _context.ConversationHistories.Add(conversationHistory);
                 await _context.SaveChangesAsync();
 
-                return Ok(new { response });
+                // Fetch the updated contract details
+                var updatedContract = await _context.Contracts.FindAsync(id);
+
+                object contractDetails;
+                if (updatedContract is ForwardContract forwardContract)
+                {
+                    contractDetails = new
+                    {
+                        id = forwardContract.Id,
+                        contractType = forwardContract.ContractType,
+                        product = forwardContract.Product,
+                        price = forwardContract.Price,
+                        volume = forwardContract.Volume,
+                        deliveryTerms = forwardContract.DeliveryTerms,
+                        appendix = forwardContract.Appendix,
+                        futureDeliveryDate = forwardContract.FutureDeliveryDate,
+                        settlementTerms = forwardContract.SettlementTerms,
+                        forwardPrice = forwardContract.ForwardPrice
+                    };
+                }
+                else
+                {
+                    contractDetails = new
+                    {
+                        id = updatedContract.Id,
+                        contractType = updatedContract.ContractType,
+                        product = updatedContract.Product,
+                        price = updatedContract.Price,
+                        volume = updatedContract.Volume,
+                        deliveryTerms = updatedContract.DeliveryTerms,
+                        appendix = updatedContract.Appendix
+                    };
+                }
+
+                return Ok(new { response, updatedContract = contractDetails });
             }
             catch (HttpRequestException ex)
             {
@@ -87,6 +128,10 @@ namespace ContractBotApi.Controllers
 
             try
             {
+                // Check if a contract with the same filename already exists
+                var existingContract = await _context.Contracts
+                    .FirstOrDefaultAsync(c => c.OriginalFileName == file.FileName);
+
                 // Upload to Azure Blob Storage
                 _logger.LogInformation("Getting blob container client");
                 var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
@@ -111,13 +156,26 @@ namespace ContractBotApi.Controllers
                 }
                 _logger.LogInformation("Text extracted, length: {Length}", text.Length);
 
-                var contract = new Contract
+                Contract contract;
+                if (existingContract != null)
                 {
-                    OriginalFileName = file.FileName,
-                    BlobStorageLocation = blobClient.Uri.ToString(),
-                    UploadTimestamp = DateTime.UtcNow,
-                    ContractText = text
-                };
+                    // Update existing contract
+                    contract = existingContract;
+                    contract.BlobStorageLocation = blobClient.Uri.ToString();
+                    contract.UploadTimestamp = DateTime.UtcNow;
+                    contract.ContractText = text;
+                }
+                else
+                {
+                    // Create new contract
+                    contract = new Contract
+                    {
+                        OriginalFileName = file.FileName,
+                        BlobStorageLocation = blobClient.Uri.ToString(),
+                        UploadTimestamp = DateTime.UtcNow,
+                        ContractText = text
+                    };
+                }
 
                 // Extract contract data using OpenAI API
                 _logger.LogInformation("Extracting contract data using OpenAI API");
@@ -144,6 +202,7 @@ namespace ContractBotApi.Controllers
                         case "forward contract":
                             var forwardContract = new ForwardContract
                             {
+                                Id = contract.Id,
                                 OriginalFileName = contract.OriginalFileName,
                                 BlobStorageLocation = contract.BlobStorageLocation,
                                 UploadTimestamp = contract.UploadTimestamp,
@@ -155,61 +214,23 @@ namespace ContractBotApi.Controllers
                                 DeliveryTerms = contract.DeliveryTerms,
                                 Appendix = contract.Appendix,
                             };
-                            // TODO: This should be implemented for other contract types
                             await forwardContract.ExtractForwardContractDataAsync(_httpClient, apiKey, _logger);
                             contractToAdd = forwardContract;
                             break;
-                        case "spot contract":
-                            contractToAdd = new SpotContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
-                        case "option contract":
-                            contractToAdd = new OptionContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
-                        case "swap contract":
-                            contractToAdd = new SwapContract
-                            {
-                                OriginalFileName = contract.OriginalFileName,
-                                BlobStorageLocation = contract.BlobStorageLocation,
-                                UploadTimestamp = contract.UploadTimestamp,
-                                ContractText = contract.ContractText,
-                                ContractType = contract.ContractType,
-                                Product = contract.Product,
-                                Price = contract.Price,
-                                Volume = contract.Volume,
-                                DeliveryTerms = contract.DeliveryTerms,
-                                Appendix = contract.Appendix,
-                            };
-                            break;
+                        // TODO: Implement other contract types
                         default:
                             contractToAdd = contract;
                             break;
                     }
 
-                    _context.Contracts.Add(contractToAdd);
+                    if (existingContract != null)
+                    {
+                        _context.Entry(existingContract).CurrentValues.SetValues(contractToAdd);
+                    }
+                    else
+                    {
+                        _context.Contracts.Add(contractToAdd);
+                    }
                     await _context.SaveChangesAsync();
 
                     object response;
@@ -219,7 +240,7 @@ namespace ContractBotApi.Controllers
                         response = new
                         {
                             isContract = true,
-                            fileId = contractToAdd.Id,
+                            id = contractToAdd.Id,
                             originalFileName = contractToAdd.OriginalFileName,
                             blobStorageLocation = contractToAdd.BlobStorageLocation,
                             contractText = contractToAdd.ContractText,
@@ -239,7 +260,7 @@ namespace ContractBotApi.Controllers
                         response = new
                         {
                             isContract = true,
-                            fileId = contractToAdd.Id,
+                            id = contractToAdd.Id,
                             originalFileName = contractToAdd.OriginalFileName,
                             blobStorageLocation = contractToAdd.BlobStorageLocation,
                             contractText = contractToAdd.ContractText,
@@ -267,16 +288,23 @@ namespace ContractBotApi.Controllers
             }
         }
 
-        [HttpPost("generate-pdf")]
-        public async Task<IActionResult> GeneratePdf([FromBody] PdfGenerationRequest request)
+        [HttpPatch("edit-contract/{id}")]
+        public async Task<IActionResult> EditContract(int id, [FromBody] PdfGenerationRequest request)
         {
-            if (string.IsNullOrEmpty(request.FileName) || string.IsNullOrEmpty(request.TextContent))
+            if (string.IsNullOrEmpty(request.TextContent))
             {
-                return BadRequest("FileName and TextContent are required.");
+                return BadRequest("TextContent is required.");
             }
 
             try
             {
+                // Fetch the contract from the database
+                var contract = await _context.Contracts.FindAsync(id);
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
                 // Generate PDF
                 byte[] pdfBytes;
                 using (MemoryStream ms = new MemoryStream())
@@ -293,19 +321,132 @@ namespace ContractBotApi.Controllers
                 var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
                 await containerClient.CreateIfNotExistsAsync();
 
-                var blobClient = containerClient.GetBlobClient(request.FileName);
+                var blobClient = containerClient.GetBlobClient(contract.OriginalFileName);
 
                 using (MemoryStream stream = new MemoryStream(pdfBytes))
                 {
                     await blobClient.UploadAsync(stream, true);
                 }
 
-                return Ok(new { message = "PDF generated and uploaded successfully", blobUrl = blobClient.Uri.ToString() });
+                // Extract contract data
+                var apiKey = _configuration["OpenAIApiKey"];
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    return BadRequest("OpenAI API key not found in configuration.");
+                }
+
+                bool isContract = await contract.ExtractContractDataAsync(_httpClient, apiKey, request.TextContent, _logger);
+                if (!isContract)
+                {
+                    return BadRequest("The updated text is not recognized as a valid contract.");
+                }
+
+                // Update the contract in the database
+                contract.ContractText = request.TextContent;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { 
+                    message = "PDF generated, uploaded, and contract data updated successfully", 
+                    blobUrl = blobClient.Uri.ToString(),
+                    updatedContract = new
+                    {
+                        id = contract.Id,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    }
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error generating or uploading PDF: {Message}", ex.Message);
                 return StatusCode(500, $"Error generating or uploading PDF: {ex.Message}");
+            }
+        }
+
+        [HttpGet("contracts")]
+        public async Task<IActionResult> GetContracts()
+        {
+            try
+            {
+                var contracts = await _context.Contracts
+                    .Select(c => new { c.Id, c.OriginalFileName })
+                    .ToListAsync();
+
+                return Ok(contracts);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving contracts: {Message}", ex.Message);
+                return StatusCode(500, $"Error retrieving contracts: {ex.Message}");
+            }
+        }
+
+        [HttpGet("contract/{id}")]
+        public async Task<IActionResult> GetContract(int id)
+        {
+            try
+            {
+                var contract = await _context.Contracts
+                    .FirstOrDefaultAsync(c => c.Id == id);
+
+                if (contract == null)
+                {
+                    return NotFound($"Contract with ID {id} not found.");
+                }
+
+                var forwardContract = await _context.Set<ForwardContract>()
+                    .FirstOrDefaultAsync(fc => fc.Id == id);
+
+                object response;
+
+                if (forwardContract != null)
+                {
+                    response = new
+                    {
+                        isContract = true,
+                        id = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix,
+                        futureDeliveryDate = forwardContract.FutureDeliveryDate,
+                        settlementTerms = forwardContract.SettlementTerms,
+                        forwardPrice = forwardContract.ForwardPrice
+                    };
+                }
+                else
+                {
+                    response = new
+                    {
+                        isContract = true,
+                        id = contract.Id,
+                        originalFileName = contract.OriginalFileName,
+                        blobStorageLocation = contract.BlobStorageLocation,
+                        contractText = contract.ContractText,
+                        contractType = contract.ContractType,
+                        product = contract.Product,
+                        price = contract.Price,
+                        volume = contract.Volume,
+                        deliveryTerms = contract.DeliveryTerms,
+                        appendix = contract.Appendix
+                    };
+                }
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving contract: {Message}", ex.Message);
+                return StatusCode(500, $"Error retrieving contract: {ex.Message}");
             }
         }
 
@@ -412,18 +553,11 @@ namespace ContractBotApi.Controllers
 
     public class GPTRequest
     {
-        public string? Prompt { get; set; }
+        public string Prompt { get; set; }
     }
 
     public class PdfGenerationRequest
     {
-        public string FileName { get; set; }
         public string TextContent { get; set; }
-    }
-
-    public class ContractGPTRequest
-    {
-        public Contract Contract { get; set; }
-        public string Prompt { get; set; }
     }
 }
