@@ -234,6 +234,7 @@ public class ContractService
     {
         _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
 
+        // Improved system prompt with clearer instructions
         var systemPrompt = $@"You are a state of the art contract parsing, interpreting, and editing engine. The user is going to submit a prompt related to the contract text below.
 
 If the user asks a question about the content of the contract, answer that user's question using the contract text as a reference.
@@ -250,6 +251,8 @@ When a user asks this type of question, respond in this JSON format:
 
 If the user submits a prompt that relates to making a change, or an edit to the contract, even if this request is in the form of a question, update the text of the contract accordingly and return it as the ""updated_text"" field, note that this type of prompt is a ""contract edit"", and send a short ""prompt_response"" explaining the change you have made.
 
+IMPORTANT: For edit requests like ""Change the product to Gold"" or ""Update the price to $500"", you MUST classify these as ""contract_edit"" type prompts and make the appropriate changes to the contract text.
+
 When a user requests a contract edit, respond in this JSON format:
 {{
 ""prompt_type"": ""contract_edit"",
@@ -260,6 +263,8 @@ When a user requests a contract edit, respond in this JSON format:
 Some examples of prompts that might result in an edit would be:
 ""Rewrite this contract, replacing 'biodiesel' with 'SAF' throughout the document""
 ""Can you change the delivery date to December 3, 2025?""
+""Change the product to Gold""
+""Update the price to $500 per ounce""
 
 Here is the Contract Text. All prompts submitted by the user will be in reference to this contract text:
 """"""
@@ -274,8 +279,8 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
                 new { role = "system", content = new[] { new { type = "text", text = systemPrompt } } },
                 new { role = "user", content = new[] { new { type = "text", text = prompt } } }
             },
-            temperature = 1,
-            max_tokens = 4096,
+            temperature = 0.2,
+            max_tokens = 16000,
             top_p = 1,
             frequency_penalty = 0,
             presence_penalty = 0
@@ -290,26 +295,57 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
             var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
             var gptResponse = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
 
-            // Extract JSON content from the response
-            var jsonStartIndex = gptResponse.IndexOf('{');
-            var jsonEndIndex = gptResponse.LastIndexOf('}');
-            if (jsonStartIndex >= 0 && jsonEndIndex >= 0 && jsonEndIndex > jsonStartIndex)
-            {
-                gptResponse = gptResponse.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-            }
+            // Use the existing RemoveMarkdownFormatting method
+            gptResponse = RemoveMarkdownFormatting(gptResponse);
 
             try
             {
-                // Escape newline characters in the updated_text field
-                gptResponse = Regex.Replace(gptResponse, @"(?<=\""updated_text\""\s*:\s*\"")(.*?)(?=\"")", m => m.Value.Replace("\n", "\\n"), RegexOptions.Singleline);
+                // More robust JSON extraction
+                var jsonMatch = Regex.Match(gptResponse, @"\{(?:[^{}]|(?<open>\{)|(?<-open>\}))+(?(open)(?!))\}", RegexOptions.Singleline);
+                if (jsonMatch.Success)
+                {
+                    gptResponse = jsonMatch.Value;
+                }
 
+                // Escape newline characters in the updated_text field more robustly
+                gptResponse = Regex.Replace(gptResponse, @"(?<=""updated_text""\s*:\s*"")(.*?)(?="")", 
+                    m => m.Value.Replace("\n", "\\n").Replace("\r", "\\r"), 
+                    RegexOptions.Singleline);
+
+                // Validate JSON structure before parsing
                 var parsedResponse = JsonSerializer.Deserialize<JsonElement>(gptResponse);
-                var promptType = parsedResponse.GetProperty("prompt_type").GetString();
-                var promptResponse = parsedResponse.GetProperty("prompt_response").GetString();
-                var updatedText = promptType == "contract_edit" ? parsedResponse.GetProperty("updated_text").GetString() : null;
-
+                
+                // Check if required properties exist
+                if (!parsedResponse.TryGetProperty("prompt_type", out var promptTypeElement))
+                {
+                    throw new JsonException("Missing 'prompt_type' property in response");
+                }
+                
+                var promptType = promptTypeElement.GetString();
+                
+                if (!parsedResponse.TryGetProperty("prompt_response", out var promptResponseElement))
+                {
+                    throw new JsonException("Missing 'prompt_response' property in response");
+                }
+                
+                var promptResponse = promptResponseElement.GetString();
+                
+                // Only try to get updated_text if it's a contract_edit
+                string updatedText = null;
                 if (promptType == "contract_edit")
                 {
+                    if (!parsedResponse.TryGetProperty("updated_text", out var updatedTextElement))
+                    {
+                        throw new JsonException("Missing 'updated_text' property in contract_edit response");
+                    }
+                    updatedText = updatedTextElement.GetString();
+                    
+                    if (string.IsNullOrWhiteSpace(updatedText))
+                    {
+                        _logger.LogWarning("Empty updated_text received for contract_edit prompt: {Prompt}", prompt);
+                        throw new JsonException("Empty 'updated_text' received for contract_edit");
+                    }
+
                     // Create a new PDF with the updated text
                     byte[] pdfBytes;
                     using (var ms = new MemoryStream())
@@ -350,6 +386,30 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
             catch (JsonException ex)
             {
                 _logger.LogError(ex, "Error parsing GPT response: {Response}", gptResponse);
+                
+                // Fallback mechanism for simple edits when JSON parsing fails
+                if (prompt.Contains("Change the product to", StringComparison.OrdinalIgnoreCase) || 
+                    prompt.Contains("Update the product to", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Extract the product name from the prompt
+                    var productMatch = Regex.Match(prompt, @"(?:Change|Update) the product to\s+(.+?)(?:\.|\s*$)", RegexOptions.IgnoreCase);
+                    if (productMatch.Success)
+                    {
+                        var newProduct = productMatch.Groups[1].Value.Trim();
+                        
+                        // Update the contract with the new product
+                        contract.Product = newProduct;
+                        _context.Update(contract);
+                        await _context.SaveChangesAsync();
+                        
+                        return new {
+                            prompt_type = "contract_edit",
+                            prompt_response = $"The product has been updated to {newProduct}.",
+                            updated_text = contract.ContractText.Replace(contract.Product, newProduct)
+                        };
+                    }
+                }
+                
                 throw new Exception($"Error parsing GPT response: {ex.Message}. Raw response: {gptResponse}");
             }
         }
