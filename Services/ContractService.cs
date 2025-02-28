@@ -66,8 +66,8 @@ public class ContractService
                     }
                 }
             },
-            temperature = 1,
-            max_tokens = 4096,
+            temperature = 0.2,
+            max_tokens = 1024,
             top_p = 1,
             frequency_penalty = 0,
             presence_penalty = 0
@@ -163,8 +163,8 @@ public class ContractService
                     }
                 }
             },
-            temperature = 1,
-            max_tokens = 4096,
+            temperature = 0.2,
+            max_tokens = 8192,
             top_p = 1,
             frequency_penalty = 0,
             presence_penalty = 0
@@ -193,6 +193,16 @@ public class ContractService
             try
             {
                 var extractedData = JsonSerializer.Deserialize<JsonElement>(extractedDataString);
+                
+                // Validate that required fields exist
+                var requiredFields = new[] { "product", "price", "volume" };
+                foreach (var field in requiredFields)
+                {
+                    if (!extractedData.TryGetProperty(field, out _))
+                    {
+                        _logger.LogWarning("Missing required field '{Field}' in extraction response", field);
+                    }
+                }
 
                 foreach (var property in extractedData.EnumerateObject())
                 {
@@ -286,136 +296,175 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
             presence_penalty = 0
         };
 
-        var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-        var response = await _httpClient.PostAsync("https://api.openai.com/v1/chat/completions", content);
+        // Declare gptResponse at the method level so it's accessible in both try and catch blocks
+        string gptResponse = string.Empty;
 
-        if (response.IsSuccessStatusCode)
+        try
         {
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-            var gptResponse = jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-
-            // Use the existing RemoveMarkdownFormatting method
-            gptResponse = RemoveMarkdownFormatting(gptResponse);
-
-            try
+            // Get response from OpenAI
+            gptResponse = await GetOpenAIResponseAsync(requestBody);
+            
+            // Sanitize and parse the JSON
+            var sanitizedJson = SanitizeJsonResponse(gptResponse);
+            _logger.LogInformation("Sanitized JSON: {SanitizedJson}", sanitizedJson);
+            
+            // Parse the JSON
+            var parsedResponse = JsonSerializer.Deserialize<JsonElement>(sanitizedJson);
+            
+            // Check if required properties exist
+            if (!parsedResponse.TryGetProperty("prompt_type", out var promptTypeElement))
             {
-                // More robust JSON extraction
-                var jsonMatch = Regex.Match(gptResponse, @"\{(?:[^{}]|(?<open>\{)|(?<-open>\}))+(?(open)(?!))\}", RegexOptions.Singleline);
-                if (jsonMatch.Success)
+                throw new JsonException("Missing 'prompt_type' property in response");
+            }
+            
+            var promptType = promptTypeElement.GetString();
+            
+            if (!parsedResponse.TryGetProperty("prompt_response", out var promptResponseElement))
+            {
+                throw new JsonException("Missing 'prompt_response' property in response");
+            }
+            
+            var promptResponse = promptResponseElement.GetString();
+            
+            // Only try to get updated_text if it's a contract_edit
+            string updatedText = null;
+            if (promptType == "contract_edit")
+            {
+                if (!parsedResponse.TryGetProperty("updated_text", out var updatedTextElement))
                 {
-                    gptResponse = jsonMatch.Value;
+                    throw new JsonException("Missing 'updated_text' property in contract_edit response");
+                }
+                updatedText = updatedTextElement.GetString();
+                
+                if (string.IsNullOrWhiteSpace(updatedText))
+                {
+                    _logger.LogWarning("Empty updated_text received for contract_edit prompt: {Prompt}", prompt);
+                    throw new JsonException("Empty 'updated_text' received for contract_edit");
                 }
 
-                // Escape newline characters in the updated_text field more robustly
-                gptResponse = Regex.Replace(gptResponse, @"(?<=""updated_text""\s*:\s*"")(.*?)(?="")", 
-                    m => m.Value.Replace("\n", "\\n").Replace("\r", "\\r"), 
-                    RegexOptions.Singleline);
-
-                // Validate JSON structure before parsing
-                var parsedResponse = JsonSerializer.Deserialize<JsonElement>(gptResponse);
-                
-                // Check if required properties exist
-                if (!parsedResponse.TryGetProperty("prompt_type", out var promptTypeElement))
+                // Create a new PDF with the updated text
+                byte[] pdfBytes;
+                using (var ms = new MemoryStream())
                 {
-                    throw new JsonException("Missing 'prompt_type' property in response");
-                }
-                
-                var promptType = promptTypeElement.GetString();
-                
-                if (!parsedResponse.TryGetProperty("prompt_response", out var promptResponseElement))
-                {
-                    throw new JsonException("Missing 'prompt_response' property in response");
-                }
-                
-                var promptResponse = promptResponseElement.GetString();
-                
-                // Only try to get updated_text if it's a contract_edit
-                string updatedText = null;
-                if (promptType == "contract_edit")
-                {
-                    if (!parsedResponse.TryGetProperty("updated_text", out var updatedTextElement))
+                    using (var document = new Document())
                     {
-                        throw new JsonException("Missing 'updated_text' property in contract_edit response");
+                        PdfWriter.GetInstance(document, ms);
+                        document.Open();
+                        document.Add(new Paragraph(updatedText));
+                        document.Close();
                     }
-                    updatedText = updatedTextElement.GetString();
+                    pdfBytes = ms.ToArray();
+                }
+
+                // Update Azure Blob Storage
+                var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
+                var blobClient = containerClient.GetBlobClient(contract.OriginalFileName);
+                using (var stream = new MemoryStream(pdfBytes))
+                {
+                    await blobClient.UploadAsync(stream, true);
+                }
+
+                // Update database
+                contract.ContractText = updatedText;
+                _context.Update(contract);
+                await _context.SaveChangesAsync();
+
+                // Re-extract contract data
+                await ExtractContractDataAsync(contract, updatedText);
+            }
+
+            return new { 
+                prompt_type = promptType,
+                prompt_response = promptResponse,
+                updated_text = updatedText
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing GPT response: {Response}", gptResponse);
+            
+            // Enhanced error handling for JSON parsing issues
+            if (gptResponse.Contains("updated_text") && gptResponse.Contains("prompt_type"))
+            {
+                _logger.LogWarning("Attempting manual JSON extraction as fallback");
+                
+                try {
+                    // Manual extraction of key fields
+                    var promptTypeMatch = Regex.Match(gptResponse, @"""prompt_type""\s*:\s*""([^""]+)""");
+                    var promptResponseMatch = Regex.Match(gptResponse, @"""prompt_response""\s*:\s*""([^""]+)""");
                     
-                    if (string.IsNullOrWhiteSpace(updatedText))
+                    if (promptTypeMatch.Success && promptResponseMatch.Success)
                     {
-                        _logger.LogWarning("Empty updated_text received for contract_edit prompt: {Prompt}", prompt);
-                        throw new JsonException("Empty 'updated_text' received for contract_edit");
-                    }
-
-                    // Create a new PDF with the updated text
-                    byte[] pdfBytes;
-                    using (var ms = new MemoryStream())
-                    {
-                        using (var document = new Document())
+                        var promptType = promptTypeMatch.Groups[1].Value;
+                        var promptResponse = promptResponseMatch.Groups[1].Value;
+                        
+                        if (promptType == "contract_edit")
                         {
-                            PdfWriter.GetInstance(document, ms);
-                            document.Open();
-                            document.Add(new Paragraph(updatedText));
-                            document.Close();
+                            // For contract edits, try to extract the updated text
+                            var updatedTextStart = gptResponse.IndexOf("\"updated_text\"");
+                            if (updatedTextStart > 0)
+                            {
+                                var textStartIndex = gptResponse.IndexOf(":", updatedTextStart) + 1;
+                                var textEndIndex = gptResponse.LastIndexOf("}");
+                                
+                                if (textStartIndex > 0 && textEndIndex > textStartIndex)
+                                {
+                                    var updatedText = gptResponse.Substring(textStartIndex, textEndIndex - textStartIndex).Trim();
+                                    
+                                    // Remove any quotes at the beginning and end
+                                    updatedText = updatedText.TrimStart('"', ' ').TrimEnd('"', ' ', ',');
+                                    
+                                    // If we have a valid updated text, proceed with the update
+                                    if (!string.IsNullOrWhiteSpace(updatedText))
+                                    {
+                                        // Update database
+                                        contract.ContractText = updatedText;
+                                        _context.Update(contract);
+                                        await _context.SaveChangesAsync();
+                                        
+                                        // Re-extract contract data
+                                        await ExtractContractDataAsync(contract, updatedText);
+                                        
+                                        return new {
+                                            prompt_type = promptType,
+                                            prompt_response = promptResponse,
+                                            updated_text = updatedText
+                                        };
+                                    }
+                                }
+                            }
                         }
-                        pdfBytes = ms.ToArray();
                     }
-
-                    // Update Azure Blob Storage
-                    var containerClient = _blobServiceClient.GetBlobContainerClient("pdfs");
-                    var blobClient = containerClient.GetBlobClient(contract.OriginalFileName);
-                    using (var stream = new MemoryStream(pdfBytes))
-                    {
-                        await blobClient.UploadAsync(stream, true);
-                    }
-
-                    // Update database
-                    contract.ContractText = updatedText;
+                }
+                catch (Exception fallbackEx) {
+                    _logger.LogError(fallbackEx, "Fallback JSON extraction failed");
+                }
+            }
+            
+            // Existing fallback for product changes
+            if (prompt.Contains("Change the product to", StringComparison.OrdinalIgnoreCase) || 
+                prompt.Contains("Update the product to", StringComparison.OrdinalIgnoreCase))
+            {
+                // Extract the product name from the prompt
+                var productMatch = Regex.Match(prompt, @"(?:Change|Update) the product to\s+(.+?)(?:\.|\s*$)", RegexOptions.IgnoreCase);
+                if (productMatch.Success)
+                {
+                    var newProduct = productMatch.Groups[1].Value.Trim();
+                    
+                    // Update the contract with the new product
+                    contract.Product = newProduct;
                     _context.Update(contract);
                     await _context.SaveChangesAsync();
-
-                    // Re-extract contract data
-                    await ExtractContractDataAsync(contract, updatedText);
+                    
+                    return new {
+                        prompt_type = "contract_edit",
+                        prompt_response = $"The product has been updated to {newProduct}.",
+                        updated_text = contract.ContractText.Replace(contract.Product, newProduct)
+                    };
                 }
-
-                return new { 
-                    prompt_type = promptType,
-                    prompt_response = promptResponse,
-                    updated_text = updatedText
-                };
             }
-            catch (JsonException ex)
-            {
-                _logger.LogError(ex, "Error parsing GPT response: {Response}", gptResponse);
-                
-                // Fallback mechanism for simple edits when JSON parsing fails
-                if (prompt.Contains("Change the product to", StringComparison.OrdinalIgnoreCase) || 
-                    prompt.Contains("Update the product to", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Extract the product name from the prompt
-                    var productMatch = Regex.Match(prompt, @"(?:Change|Update) the product to\s+(.+?)(?:\.|\s*$)", RegexOptions.IgnoreCase);
-                    if (productMatch.Success)
-                    {
-                        var newProduct = productMatch.Groups[1].Value.Trim();
-                        
-                        // Update the contract with the new product
-                        contract.Product = newProduct;
-                        _context.Update(contract);
-                        await _context.SaveChangesAsync();
-                        
-                        return new {
-                            prompt_type = "contract_edit",
-                            prompt_response = $"The product has been updated to {newProduct}.",
-                            updated_text = contract.ContractText.Replace(contract.Product, newProduct)
-                        };
-                    }
-                }
-                
-                throw new Exception($"Error parsing GPT response: {ex.Message}. Raw response: {gptResponse}");
-            }
-        }
-        else
-        {
-            throw new HttpRequestException($"Error: {response.StatusCode}, {await response.Content.ReadAsStringAsync()}");
+            
+            throw new Exception($"Error processing GPT response: {ex.Message}. Raw response: {gptResponse}");
         }
     }
 
@@ -427,5 +476,67 @@ Here is the Contract Text. All prompts submitted by the user will be in referenc
         
         // Trim any leading or trailing whitespace
         return input.Trim();
+    }
+
+    private async Task<string> GetOpenAIResponseAsync(object requestBody)
+    {
+        _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+        var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+        
+        var response = await _httpClient.PostAsync("https://api.openai.com/v1/chat/completions", content);
+        
+        if (response.IsSuccessStatusCode)
+        {
+            var responseContent = await response.Content.ReadAsStringAsync();
+            var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+            
+            // Log token usage if available
+            if (jsonResponse.TryGetProperty("usage", out var usageElement))
+            {
+                var promptTokens = usageElement.GetProperty("prompt_tokens").GetInt32();
+                var completionTokens = usageElement.GetProperty("completion_tokens").GetInt32();
+                var totalTokens = usageElement.GetProperty("total_tokens").GetInt32();
+                
+                _logger.LogInformation(
+                    "Token usage - Prompt: {PromptTokens}, Completion: {CompletionTokens}, Total: {TotalTokens}",
+                    promptTokens, completionTokens, totalTokens
+                );
+            }
+            
+            return jsonResponse.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+        }
+        else
+        {
+            var errorContent = await response.Content.ReadAsStringAsync();
+            _logger.LogError("Error calling OpenAI API: {StatusCode}. Response content: {ErrorContent}", response.StatusCode, errorContent);
+            throw new HttpRequestException($"Error: {response.StatusCode}, {errorContent}");
+        }
+    }
+
+    private string SanitizeJsonResponse(string response)
+    {
+        // Remove markdown formatting
+        response = RemoveMarkdownFormatting(response);
+        
+        // Handle triple quotes
+        response = Regex.Replace(response, @"(?<=""[^""]*""\s*:\s*)""{3}", "\"", RegexOptions.Singleline);
+        response = Regex.Replace(response, @"""{3}(?=\s*[,}])", "\"", RegexOptions.Singleline);
+        
+        // Extract JSON object
+        var jsonMatch = Regex.Match(response, @"\{(?:[^{}]|(?<open>\{)|(?<-open>\}))+(?(open)(?!))\}", RegexOptions.Singleline);
+        if (jsonMatch.Success)
+        {
+            response = jsonMatch.Value;
+        }
+        
+        // Escape special characters in string values
+        response = Regex.Replace(response, @"(?<=""[^""]*""\s*:\s*"")(.*?)(?="")", 
+            m => m.Value
+                .Replace("\"", "\\\"")
+                .Replace("\n", "\\n")
+                .Replace("\r", "\\r"), 
+            RegexOptions.Singleline);
+        
+        return response;
     }
 }
